@@ -2,7 +2,6 @@
 #include <string.h>
 #include <malloc.h>
 #include <math.h>
-#include "astream.h"
 #include "wavefile.h"
 
 
