@@ -173,7 +173,7 @@ void power_per_ms(struct wave *a,struct wave *b) {
 		levels[i] = total_a > 99 ? total_b/(total_a/100) : 0;
 
 		if(levels[i]>FILTER_PERCENTAGE)
-		printf("%i:%02i.%1i:  %10lli  %10lli   %10lli\n", i/600,i/10%60,i%10, total_a, total_b, levels[i]);
+		printf("%i:%02i.%1i:  %10lli  %10lli   %10i\n", i/600,i/10%60,i%10, total_a, total_b, levels[i]);
 	}
 #if 0	
 	for(i = 0; i < blocks; i++) {
