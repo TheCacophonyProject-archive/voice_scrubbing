@@ -1,5 +1,5 @@
 /******************************************************************************
-* An API for reading or writing WAV files 
+* An API for reading or writing WAV files
 ******************************************************************************/
 
 /* Details of the memory structure used to hold the WAV file data */
