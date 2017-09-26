@@ -5,10 +5,10 @@
 #include "wavefile.h"
 
 
-static const kernel_len = 767; //255; /* Must be odd */
-static const double high_pass_kernel[1023];
-static const double low_pass_kernel[1023];
-static const double bandpass_kernel[1023];
+static const int kernel_len = 767; //255; /* Must be odd */
+static double high_pass_kernel[1023];
+static double low_pass_kernel[1023];
+static double bandpass_kernel[1023];
 
 static const char prefix[] = "ml_";
 #define FILTER_PERCENTAGE 25	
