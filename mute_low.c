@@ -11,9 +11,9 @@ static double low_pass_kernel[1023];
 static double bandpass_kernel[1023];
 
 static const char prefix[] = "ml_";
-#define FILTER_PERCENTAGE 25
-#define CUTOFF_HIGH (1.0/48.0)
-#define CUTOFF_LOW  (1.0/240.0)
+#define FILTER_PERCENTAGE 18
+#define CUTOFF_HIGH (1.0/8.0)
+#define CUTOFF_LOW  (1.0/40.0)
 #define PI (3.141592653589793238462643383)
 
 #define max(a,b)  ((a)>(b) ? (a) : (b))
@@ -73,53 +73,70 @@ void calc_filter(double cutoff_high, double cutoff_low) {
 struct wave *filter_bandpass(struct wave *s) {
     struct wave *n;
     int i, new_len;
+    double *totals;
+    totals = malloc(sizeof(double) * s->channel_count); 
+    if(totals == NULL) {
+      return NULL;
+    }
 
     /* Genearte a new file name by appending the prefix */
 
     /* Work out how long the new file will be, and allocate it */
     new_len = s->sample_count-(kernel_len-1);
-    n = wavefile_new(s->sample_rate,new_len);
+    n = wavefile_new(s->sample_rate,new_len, s->channel_count);
     if(n == NULL) {
-        return NULL;
+       free(totals);
+       return NULL;
     }
 
     /* Now filter and decimate the input samples */
     for(i = 0; i < new_len; i++) {
-        double total_l = 0.0;
-        double total_r = 0.0;
-        int j;
+        int c,n_channels;
+        n_channels = s->channel_count;
+        for(c = 0; c < n_channels; c++) {
+           totals[c] = 0.0;
+        }
 
         /* Filter the input */
-        for(j = 0; j < kernel_len; j++) {
-            total_l += (double)s->left_samples[i+j]  * bandpass_kernel[j];
-            total_r += (double)s->right_samples[i+j] * bandpass_kernel[j];
+        for(c = 0; c < n_channels; c++) {
+          int j;
+        
+          for(j = 0; j < kernel_len; j++) {
+              totals[c] += (double)s->channel_data[c][i+j]  * bandpass_kernel[j];
+          }
+          n->channel_data[c][i]  = (int)(totals[c]);
         }
-        n->left_samples[i]  = (int)(total_l);
-        n->right_samples[i] = (int)(total_r);
-
         if(i%(s->sample_rate*5)==0)
             printf("%i:%02i seconds processed\n",i/(s->sample_rate)/60, i/(s->sample_rate)%60);
     }
+    free(totals);
     return n;
 }
 
 struct wave *filter_rumble(struct wave *s) {
     struct wave *n;
     int i, new_len;
-
+    double *totals;
+    totals = malloc(sizeof(double) * s->channel_count);
+    if(totals == NULL) {
+      return NULL;
+    }
     /* Genearte a new file name by appending the prefix */
 
     /* Work out how long the new file will be, and allocate it */
     new_len = s->sample_count-(kernel_len-1);
-    n = wavefile_new(s->sample_rate,new_len);
+    n = wavefile_new(s->sample_rate,new_len,s->channel_count);
     if(n == NULL) {
-        return NULL;
+       free(totals);
+       return NULL;
     }
 
     /* Now filter and decimate the input samples */
     for(i = 0; i < new_len; i++) {
-        double total_l = 0.0;
-        double total_r = 0.0;
+        int c, n_channels = s->channel_count;
+        for(c = 0; c < n_channels; c++) {
+           totals[c] = 0.0;
+        }
 #if 0
         int j;
 
@@ -134,10 +151,12 @@ struct wave *filter_rumble(struct wave *s) {
         if(i%(s->sample_rate*5)==0)
             printf("%i:%02i seconds processed\n",i/(s->sample_rate)/60, i/(s->sample_rate)%60);
 #else
-        n->left_samples[i]  = (int)(s->left_samples[i+kernel_len/2]  - total_l);
-        n->right_samples[i] = (int)(s->right_samples[i+kernel_len/2] - total_r);
+        for(c = 0; c < n_channels; c++) {
+          n->channel_data[c][i]  = (int)(s->channel_data[c][i+kernel_len/2]  - totals[c]);
+        }
 #endif
     }
+    free(totals);
     return n;
 }
 
@@ -145,33 +164,46 @@ void power_per_ms(struct wave *a,struct wave *b) {
     int i;
     int s_per_ms = b->sample_rate/10;
     int blocks = (b->sample_count-1)/s_per_ms;
-    int *levels = malloc(blocks*sizeof(int));
-    int *filtered_levels = malloc(blocks*sizeof(int));
-
+    int *levels;
+    int *filtered_levels;
     long long muted = 0,unmuted = 0;
+
+    levels = malloc(blocks*sizeof(int));
+    if(levels == NULL) {
+      printf("Out of memory in power_per_ms()\n");
+      return;
+    }
+
+    filtered_levels = malloc(blocks*sizeof(int));
+    if(filtered_levels == NULL) {
+      free(levels);
+      printf("Out of memory in power_per_ms()\n");
+      return;
+    }
+
     for(i=0; i < blocks; i++)
     {
         int j;
         unsigned long long total_a = 0;
-        unsigned long long total_b = 0;
-        for(j = 0; j < s_per_ms; j++)
-        {
-            int s_a,s_b;
-            s_a = a->left_samples[i*s_per_ms+j];
-            s_b = b->left_samples[i*s_per_ms+j];
-            total_a += s_a*s_a;
-            total_b += s_b*s_b;
-            s_a = a->right_samples[i*s_per_ms+j];
-            s_b = b->right_samples[i*s_per_ms+j];
-            total_a += s_a*s_a;
-            total_b += s_b*s_b;
+        unsigned long long total_b = 0; 
+        int c, n_channels = a->channel_count;
+        for(c = 0; c < n_channels; c++) { 
+           for(j = 0; j < s_per_ms; j++)
+           {
+            
+              int s_a, s_b;
+              s_a = a->channel_data[c][i*s_per_ms+j];
+              total_a += s_a*s_a;
+              s_b = b->channel_data[c][i*s_per_ms+j];
+              total_b += s_b*s_b;
+           }
         }
         if(total_a < 40000*kernel_len)
            total_a = 40000*kernel_len;
         levels[i] = total_a > 99 ? total_b/(total_a/100) : 0;
 
         if(levels[i]>FILTER_PERCENTAGE)
-        printf("%i:%02i.%1i:  %10lli  %10lli   %10i\n", i/600,i/10%60,i%10, total_a, total_b, levels[i]);
+          printf("%i:%02i.%1i:  %10lli  %10lli   %10i\n", i/600,i/10%60,i%10, total_a, total_b, levels[i]);
     }
 #if 0
     for(i = 0; i < blocks; i++) {
@@ -215,8 +247,9 @@ void power_per_ms(struct wave *a,struct wave *b) {
        if(block < 0)        block = 0;
        if(block > blocks-1) block = blocks-1;
        if(filtered_levels[block]>0) {
-           a->left_samples[i]  = 0;
-           a->right_samples[i] = 0;
+           int c, n_channels = a->channel_count;
+           for(c = 0; c < n_channels; c++)
+             a->channel_data[c][i]  = 0;
         muted++;
        } else {
         unmuted++;
@@ -237,6 +270,7 @@ int main(int argc, char *argv[]) {
     while(argc > 1) {
         struct wave *s;
         s = wavefile_read(argv[1]);
+        wavefile_write(s, "check.wav");
         if(s != NULL) {
             struct wave *n_bp,*n_hp;
 

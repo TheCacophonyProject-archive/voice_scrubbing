@@ -273,7 +273,7 @@ static int read_in_wave_header(struct wave *w, FILE *f)
          return 0;
   }
   w->channel_count = two_bytes;
-  if(w->channel_count != 2) {
+  if(w->channel_count != 2 && w->channel_count != 1) {
           printf("Unexpected channel count %i\n", w->channel_count);
           return 0;
   }
@@ -337,7 +337,7 @@ static int read_in_wave_header(struct wave *w, FILE *f)
 static int read_in_samples(struct wave *w, FILE *f)
 {
   int data_size;
-
+  int c, n_channels = w->channel_count;
   /******************************
   * Now get the size            *
   ******************************/
@@ -348,46 +348,45 @@ static int read_in_samples(struct wave *w, FILE *f)
   data_size = four_bytes;
   printf("'data' size is %i, plus 8 bytes header\n", data_size);
 
-  w->left_samples  = malloc(sizeof(int)*(data_size/4));
-  if(w->left_samples == NULL) {
-          printf("Out of memory for left samples\n");
-          return 0;
+  w->channel_data = malloc(sizeof(int *) * n_channels); 
+  if(w->channel_data == NULL) {
+    printf("Out of memory for channel data array\n");
+    return 0;
+  }
+  for(c = 0; c < n_channels; c++) {
+     w->channel_data[c]  = NULL;
   }
 
-  w->right_samples = malloc(sizeof(int)*(data_size/4));
-  if(w->right_samples == NULL) {
-          printf("Out of memory for right samples\n");
-          return 0;
+  for(c = 0; c < n_channels; c++) {
+     w->channel_data[c]  = malloc(sizeof(int)*(data_size/2)/n_channels);
+     if(w->channel_data[c] == NULL) {
+        printf("Out of memory for channel data\n");
+        return 0;
+     }
   }
 
-  w->left_samples  = malloc(sizeof(int)*(data_size/4));
-  if(w->left_samples == NULL) {
-          printf("Out of memory for left samples\n");
-          return 0;
-  }
-
-  w->right_samples = malloc(sizeof(int)*(data_size/4));
-  if(w->right_samples == NULL) {
-          printf("Out of memory for right samples\n");
-          return 0;
+  if(c != n_channels) {
+     for(c = 0; c < n_channels; c++) {
+        if(w->channel_data[c] == NULL) {
+           free(w->channel_data[c]);
+        }
+     }
+     free(w->channel_data);
+     w->channel_data = NULL;
+     return 0;
   }
 
   w->sample_count = 0;
-  while(data_size > 3) {
+  while(data_size >= 2*n_channels) {
+     for(c = 0; c < n_channels; c++) {
         if(!read_two_bytes(f)) {
-                printf("Run out of data\n");
-                return 0;
+           printf("Run out of data\n");
+           return 0;
         }
-        w->left_samples[w->sample_count] = two_bytes;
-
-        if(!read_two_bytes(f)) {
-                printf("Run out of data\n");
-                return 0;
-        }
-        w->right_samples[w->sample_count] = two_bytes;
-
-        data_size -= 4;;
-        w->sample_count++;
+        w->channel_data[c][w->sample_count] = two_bytes;
+        data_size -= 2;
+     }
+     w->sample_count++;
   }
   printf("Just read in %i samples\n", w->sample_count);
   return 1;
@@ -457,7 +456,7 @@ static int write_out_headers(struct wave *w, FILE *f) {
 
         total_length = 8                    /* RIFF section length  */
                      + 8 + 16               /* WAVE section length */
-                                 + 8 + w->sample_count*4;  /* Data section length */
+                                 + 8 + w->sample_count*2 * w->channel_count;  /* Data section length */
 
         if(!write_four_chars(f,"RIFF")) {
                 printf("Error writing RIFF\n");
@@ -487,7 +486,7 @@ static int write_out_headers(struct wave *w, FILE *f) {
                 return 0;
         }
 
-        if(!write_two_bytes(f,2)) {
+        if(!write_two_bytes(f,w->channel_count)) {
                 printf("Error writing channel count\n");
                 return 0;
         }
@@ -521,6 +520,7 @@ static int write_out_samples(struct wave *w, FILE *f) {
         int data_length;
         int i;
         int has_clipped = 0;
+        int n_channels = w->channel_count;
 
         data_length = w->sample_count*4;
 
@@ -533,7 +533,9 @@ static int write_out_samples(struct wave *w, FILE *f) {
                 return 0;
         }
         for(i = 0; i < w->sample_count; i++) {
-                int clipped = w->left_samples[i];
+            int c;
+            for(c = 0; c < n_channels; c++) {
+                int clipped = w->channel_data[c][i];
                 if (clipped < -32767) {
                         clipped = -32767;
                         has_clipped++;
@@ -542,21 +544,9 @@ static int write_out_samples(struct wave *w, FILE *f) {
                         has_clipped++;
                 }
                 if(!write_two_bytes(f, clipped)) {
-                        printf("Error writing left sample\n");
+                        printf("Error writing sample\n");
                 }
-
-                clipped = w->left_samples[i];
-                if (clipped < -32767) {
-                        clipped = -32767;
-                        has_clipped++;
-                } else if(clipped > 32767) {
-                        clipped = 32767;
-                        has_clipped++;
-                }
-
-                if(!write_two_bytes(f, clipped)) {
-                        printf("Error writing right sample\n");
-                }
+            }
         }
         if(has_clipped > 0) {
                 printf("WARNING: %i samples have been clampped as they are too loud\n",has_clipped);
@@ -568,31 +558,33 @@ static int write_out_samples(struct wave *w, FILE *f) {
 * Check that we will not clip the signal, and if needed adjust the volume
 ******************************************************************************/
 void prevent_clipping(struct wave *w) {
-        int i;
-        int max = 0, min=0;
+    int i,c;
+    int max = 0, min=0;
+    int n_channels = w->channel_count;
+
+    for(c = 0; c < n_channels; c++) { 
         for(i = 0; i < w->sample_count; i++) {
-                if(w->left_samples[i] < min) min = w->left_samples[i];
-                if(w->left_samples[i] > max) max = w->left_samples[i];
+            if(w->channel_data[c][i] < min) min = w->channel_data[c][i];
+            if(w->channel_data[c][i] > max) max = w->channel_data[c][i];
+        }
+    }
+    if(min <= -32767 && max >= 32767) {
+        printf("Signal will not clip - no scaling needed\n");
+    }
+    else {
+        /* Which one do we need to scale to fit? */
+        if(max < -min) {
+             max = -min;
+        }
+        max = (max*3)/4;
+        printf("Signal will be scaled by 8191/%i\n",max);
 
-                if(w->right_samples[i] < min) min = w->right_samples[i];
-                if(w->right_samples[i] > max) max = w->right_samples[i];
+        for(c = 0; c < n_channels; c++) { 
+            for(i = 0; i < w->sample_count; i++) {
+               w->channel_data[c][i]  = w->channel_data[c][i]  * 8191/max;
+            }
         }
-        if(min <= -32767 && max >= 32767) {
-                printf("Signal will not clip - no scaling needed\n");
-        }
-        else {
-                /* Which one do we need to scale to fit? */
-                if(max < -min) {
-                        max = -min;
-                }
-                max = (max*3)/4;
-                printf("Signal will be scaled by 8191/%i\n",max);
-
-                for(i = 0; i < w->sample_count; i++) {
-                        w->left_samples[i]  = w->left_samples[i]  * 8191/max;
-                        w->right_samples[i] = w->right_samples[i] * 8191/max;
-                }
-        }
+    }
 }
 /******************************************************************************
 * Write the header, then the data for the output file
@@ -626,52 +618,71 @@ int wavefile_write(struct wave *w, char *filename) {
 * Release all the memory holding the details of the wave file
 ******************************************************************************/
 void wavefile_destroy(struct wave *w) {
-        if(w->left_samples != NULL)
-                free(w->left_samples);
-        if(w->right_samples != NULL)
-                free(w->right_samples);
-        free(w);
+    int c;
+    if(w->channel_data != NULL) {
+      for(c= 0; c < w->channel_count; c++) {
+         if(w->channel_data[c] != NULL)
+            free(w->channel_data[c]);
+      }
+      free(w->channel_data);
+    }
+    free(w);
 }
 
 /******************************************************************************
 * Create the data for a new wave file
 ******************************************************************************/
-struct wave *wavefile_new(int sample_rate, int sample_count) {
-        struct wave *w;
-        int i;
+struct wave *wavefile_new(int sample_rate, int sample_count, int channel_count) {
+    struct wave *w;
+    int i,c;
 
-        printf("Creating an empty wave structure for %i samples\n",sample_count);
-        w = malloc(sizeof(struct wave));
-        if(w == NULL) {
-                printf("Out of memory\n");
-                return NULL;
-        }
+    printf("Creating an empty wave structure for %i samples\n",sample_count);
+    w = malloc(sizeof(struct wave));
+    if(w == NULL) {
+        printf("Out of memory\n");
+        return NULL;
+    } 
 
-    w->channel_count   = 2;
+    w->channel_count   = channel_count;
     w->sample_rate     = sample_rate;
-    w->data_rate       = sample_rate * 4;
-    w->block_align     = 4;
+    w->data_rate       = sample_rate * 2 * channel_count;
+    w->block_align     = 2 * channel_count;
     w->bits_per_sample = 16;
     w->sample_count    = sample_count;
-
-        w->left_samples = malloc(sizeof(int)*sample_count);
-        if(w->left_samples == NULL) {
-                printf("Out of memory\n");
+ 
+    w->channel_data = malloc(sizeof(int *)*channel_count);
+    if(w->channel_data == NULL) {
+        printf("Out of memory\n");
         free(w);
-                return NULL;
-        }
-
-        w->right_samples = malloc(sizeof(int)*sample_count);
-        if(w->right_samples == NULL) {
-                printf("Out of memory\n");
-        free(w->left_samples);
-        free(w);
-                return NULL;
-        }
-        for(i = 0; i < sample_count; i++) {
-        w->left_samples[i] = 0;
-        w->right_samples[i] = 0;
+        return NULL;
     }
-        return w;
+
+    for(c= 0; c < channel_count; c++) {
+        w->channel_data[c] = NULL;
+    }
+
+    for(c= 0; c < channel_count; c++) {
+        w->channel_data[c] = malloc(sizeof(int)*sample_count);
+        if(w->channel_data[c] == NULL)
+            break;
+    }
+
+    if(c != channel_count) {
+        printf("Out of memory\n");
+        for(c= 0; c < channel_count; c++) {
+             if(w->channel_data[c] != NULL)
+                free(w->channel_data[c]);
+        }
+        free(w->channel_data);
+        free(w);
+        return NULL;
+    }
+
+    for(c= 0; c < channel_count; c++) {
+       for(i = 0; i < sample_count; i++) {
+             w->channel_data[c][i] = 0;
+       }
+    }
+    return w;
 }
 /********************** end of program ****************************************/
