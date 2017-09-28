@@ -380,7 +380,7 @@ static int read_in_samples(struct wave *w, FILE *f)
   while(data_size >= 2*n_channels) {
      for(c = 0; c < n_channels; c++) {
         if(!read_two_bytes(f)) {
-           printf("Run out of data\n");
+           printf("Run out of data with %i bytes left to read\n", data_size);
            return 0;
         }
         w->channel_data[c][w->sample_count] = two_bytes;
@@ -522,7 +522,7 @@ static int write_out_samples(struct wave *w, FILE *f) {
         int has_clipped = 0;
         int n_channels = w->channel_count;
 
-        data_length = w->sample_count*4;
+        data_length = w->sample_count*2*n_channels;
 
         if(!write_four_chars(f,"data")) {
                 printf("Error writing 'data'\n");

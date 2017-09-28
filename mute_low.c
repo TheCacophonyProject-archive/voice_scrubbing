@@ -12,11 +12,13 @@ static double bandpass_kernel[1023];
 
 static const char prefix[] = "ml_";
 #define FILTER_PERCENTAGE 18
-#define CUTOFF_HIGH (1.0/8.0)
-#define CUTOFF_LOW  (1.0/40.0)
+#define CUTOFF_HIGH (1000.0)  /* Frequency in Hz */
+#define CUTOFF_LOW  (  50.0)  /* Frequency in Hz */
 #define PI (3.141592653589793238462643383)
 
 #define max(a,b)  ((a)>(b) ? (a) : (b))
+
+#define PATH_SEPERATOR '/'
 
 void calc_filter(double cutoff_high, double cutoff_low) {
     int i;
@@ -161,7 +163,7 @@ struct wave *filter_rumble(struct wave *s) {
 }
 
 void power_per_ms(struct wave *a,struct wave *b) {
-    int i;
+    int i, percent;
     int s_per_ms = b->sample_rate/10;
     int blocks = (b->sample_count-1)/s_per_ms;
     int *levels;
@@ -257,7 +259,7 @@ void power_per_ms(struct wave *a,struct wave *b) {
     }
 
 #endif
-    int percent = muted*100/unmuted;
+    percent = muted*100/(unmuted+muted);
     printf("%i%% muted\n",percent);
 
     free(filtered_levels);
@@ -265,14 +267,13 @@ void power_per_ms(struct wave *a,struct wave *b) {
 }
 
 int main(int argc, char *argv[]) {
-    calc_filter(CUTOFF_HIGH, CUTOFF_LOW);
-
+    int rtn = 0;
     while(argc > 1) {
         struct wave *s;
         s = wavefile_read(argv[1]);
-        wavefile_write(s, "check.wav");
         if(s != NULL) {
             struct wave *n_bp,*n_hp;
+            calc_filter(CUTOFF_HIGH/(float)s->sample_rate, CUTOFF_LOW/(float)s->sample_rate);
 
             n_bp = filter_bandpass(s);
             n_hp = filter_rumble(s);
@@ -282,22 +283,48 @@ int main(int argc, char *argv[]) {
 
             if(n_bp != NULL && n_hp != NULL) {
                 char *new_name;
-                new_name = malloc(strlen(argv[1])+strlen(prefix)+1);
+                int name_len = strlen(argv[1]);
+                int prefix_len = strlen(prefix);
+                new_name = malloc(name_len+prefix_len+1);
                 if(new_name != NULL) {
-                    int i;
-                    int max_n = 0, max_s = 0;
-                    strcpy(new_name,prefix);
-                    strcat(new_name,argv[1]);
-                    wavefile_write(n_hp, new_name);
+                    int i,j;
+
+                    /* Copy the file name over */
+                    strcpy(new_name,argv[1]);
+
+                    /* Shuffle the filename forward until either we are at the 
+                     * start of the name, or we hit the directory seperator */
+                    i = name_len;
+                    new_name[i+prefix_len] = new_name[i];
+                    while(i > 0 && new_name[i-1] != PATH_SEPERATOR) {
+                      i--; 
+                      new_name[i+prefix_len] = new_name[i];
+                    }
+
+                    /* Merge in the prefix */
+                    for(j = 0; j < prefix_len; j++)
+                       new_name[i+j] = prefix[j];
+
+                    if(wavefile_write(n_hp, new_name)) {
+                       printf("Wrote output as '%s'\n",new_name);
+                    } else {
+                       printf("Unable to write output as '%s'\n",new_name);
+                       rtn = 1;
+                    }
+                } else {
+                  printf("Out of memory\n");
+                  rtn = 1;
                 }
             }
             if(n_bp != NULL)    wavefile_destroy(n_bp);
             if(n_hp != NULL)    wavefile_destroy(n_hp);
-               wavefile_destroy(s);
+            wavefile_destroy(s);
         } else {
             printf("Unable to read file %s\n",argv[1]);
+            rtn = 1;
         }
         argc--;
         argv++;
     }
+    return rtn;
 }

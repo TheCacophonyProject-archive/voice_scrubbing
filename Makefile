@@ -5,7 +5,7 @@ OBJ    = $(SRC:.c=.o)
 LIB    = -lm
 
 CC     = gcc
-CFLAGS := -W -Wall -pedantic -g
+CFLAGS := -W -Wall -pedantic -pedantic -O4
 
 .PHONY: clean
 
